@@ -25,9 +25,7 @@ declare global {
 const app = document.getElementById('app')!;
 
 if (store.getMedicines().length === 0) {
-  const samples = getSampleData();
-  storage.save(samples);
-  (store as any).medicines = samples;
+  store.initWithData(getSampleData());
 }
 
 function h(tag: string, attrs: Record<string, any> = {}, children: any[] = []): HTMLElement {

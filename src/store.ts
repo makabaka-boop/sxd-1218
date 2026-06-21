@@ -1,6 +1,7 @@
 import type { Medicine, MedicineStatus, FilterState } from './types';
 import { storage } from './storage';
 import { getTodayStr } from './utils/date';
+import { filterMedicines } from './utils/filter';
 
 type Listener = () => void;
 
@@ -65,11 +66,31 @@ function createStore() {
 
     setFilters(f: Partial<FilterState>) {
       filters = { ...filters, ...f };
+      const visibleIds = new Set(
+        filterMedicines(medicines, filters).map((m) => m.id)
+      );
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of selectedIds) {
+        if (visibleIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      }
+      if (changed) selectedIds = next;
+      notify();
+    },
+
+    initWithData(data: Medicine[]) {
+      medicines = data;
+      persist();
       notify();
     },
 
     resetFilters() {
       filters = { ...defaultFilters };
+      selectedIds = new Set();
       notify();
     },
 
