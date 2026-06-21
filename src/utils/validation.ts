@@ -24,6 +24,14 @@ export function getActivePurchaseForMedicine(medicineId: string, purchases: Purc
   );
 }
 
+export function getInboundQuantity(p: PurchaseItem): number {
+  return typeof p.actualQuantity === 'number' ? p.actualQuantity : p.quantity;
+}
+
+export function getInboundDate(p: PurchaseItem): string | null {
+  return p.actualPurchaseDate || p.completedAt || null;
+}
+
 export function validateMedicines(list: Medicine[]): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const seen = new Map<string, string[]>();

@@ -39,8 +39,19 @@ export interface PurchaseItem {
   plannedDate: string;
   completed: boolean;
   completedAt: string | null;
+  actualQuantity?: number | null;
+  actualPurchaseDate?: string | null;
+  batchExpireDate?: string | null;
+  completionNotes?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PurchaseInbound {
+  actualQuantity?: number | null;
+  actualPurchaseDate?: string | null;
+  batchExpireDate?: string | null;
+  completionNotes?: string | null;
 }
 
 export interface FilterState {

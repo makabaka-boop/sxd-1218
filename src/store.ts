@@ -3,6 +3,7 @@ import type {
   MedicineStatus,
   MedicinePurchaseStatus,
   PurchaseItem,
+  PurchaseInbound,
   PurchasePriority,
   FilterState,
 } from './types';
@@ -62,6 +63,14 @@ function createStore() {
   let editingMedicine: Medicine | null = null;
   let sortField: keyof Medicine = 'updatedAt';
   let sortAsc = false;
+  let isCompleteOpen = false;
+  let completingPurchaseId: string | null = null;
+  let completeDraft = {
+    actualQuantity: '',
+    actualPurchaseDate: '',
+    batchExpireDate: '',
+    completionNotes: '',
+  };
   const listeners = new Set<Listener>();
 
   function notify() {
@@ -74,6 +83,54 @@ function createStore() {
 
   function persistPurchases() {
     storage.savePurchases(purchaseItems);
+  }
+
+  function completePurchase(id: string, inbound?: PurchaseInbound) {
+    const item = purchaseItems.find((p) => p.id === id);
+    if (!item || item.completed) return;
+    const now = getTodayStr();
+    const actualQuantity =
+      typeof inbound?.actualQuantity === 'number' && !Number.isNaN(inbound.actualQuantity)
+        ? inbound.actualQuantity
+        : item.quantity;
+    const actualPurchaseDate = inbound?.actualPurchaseDate || now;
+    const batchExpireDate = inbound?.batchExpireDate || null;
+    const completionNotes = inbound?.completionNotes ?? null;
+
+    purchaseItems = purchaseItems.map((p) =>
+      p.id === id
+        ? {
+            ...p,
+            completed: true,
+            completedAt: actualPurchaseDate,
+            actualQuantity,
+            actualPurchaseDate,
+            batchExpireDate,
+            completionNotes,
+            updatedAt: now,
+          }
+        : p
+    );
+
+    medicines = medicines.map((m) => {
+      if (m.id !== item.medicineId) return m;
+      const remaining = m.remainingQuantity + actualQuantity;
+      let expireDate = m.expireDate;
+      if (batchExpireDate && (!expireDate || batchExpireDate > expireDate)) {
+        expireDate = batchExpireDate;
+      }
+      const hasOtherPending = purchaseItems.some(
+        (p) => p.medicineId === item.medicineId && !p.completed
+      );
+      let status: MedicineStatus;
+      if (m.status === 'stopped') status = 'stopped';
+      else if (hasOtherPending) status = 'to_purchase';
+      else status = 'purchased';
+      return { ...m, remainingQuantity: remaining, expireDate, status, updatedAt: now };
+    });
+
+    persistMedicines();
+    persistPurchases();
   }
 
   return {
@@ -92,6 +149,13 @@ function createStore() {
     getEditingMedicine() { return editingMedicine; },
     getSortField() { return sortField; },
     getSortAsc() { return sortAsc; },
+    getIsCompleteOpen() { return isCompleteOpen; },
+    getCompleteDraft() { return completeDraft; },
+
+    getCompletingPurchase(): PurchaseItem | null {
+      if (!completingPurchaseId) return null;
+      return purchaseItems.find((p) => p.id === completingPurchaseId) || null;
+    },
 
     getPendingPurchaseByMedicineId(id: string): PurchaseItem | null {
       return purchaseItems.find((p) => p.medicineId === id && !p.completed) || null;
@@ -357,23 +421,50 @@ function createStore() {
       notify();
     },
 
-    markPurchased(id: string) {
-      const item = purchaseItems.find((p) => p.id === id);
+    markPurchased(id: string, inbound?: PurchaseInbound) {
+      completePurchase(id, inbound);
+      notify();
+    },
+
+    openComplete(purchaseId: string) {
+      const item = purchaseItems.find((p) => p.id === purchaseId);
       if (!item || item.completed) return;
-      const now = getTodayStr();
-      purchaseItems = purchaseItems.map((p) =>
-        p.id === id
-          ? { ...p, completed: true, completedAt: now, updatedAt: now }
-          : p
-      );
-      medicines = medicines.map((m) => {
-        if (m.id !== item.medicineId) return m;
-        const remaining = m.remainingQuantity + item.quantity;
-        const status: MedicineStatus = m.status === 'stopped' ? m.status : 'purchased';
-        return { ...m, remainingQuantity: remaining, status, updatedAt: now };
+      completingPurchaseId = purchaseId;
+      completeDraft = {
+        actualQuantity: String(item.quantity),
+        actualPurchaseDate: getTodayStr(),
+        batchExpireDate: '',
+        completionNotes: '',
+      };
+      isCompleteOpen = true;
+      notify();
+    },
+
+    updateCompleteField<K extends keyof typeof completeDraft>(field: K, value: (typeof completeDraft)[K]) {
+      completeDraft = { ...completeDraft, [field]: value };
+      notify();
+    },
+
+    closeComplete() {
+      isCompleteOpen = false;
+      completingPurchaseId = null;
+      notify();
+    },
+
+    confirmComplete() {
+      if (!completingPurchaseId) return;
+      const id = completingPurchaseId;
+      const draft = completeDraft;
+      const qRaw = draft.actualQuantity.trim();
+      const actualQuantity = qRaw === '' ? null : Math.max(0, Number(qRaw) || 0);
+      completePurchase(id, {
+        actualQuantity,
+        actualPurchaseDate: draft.actualPurchaseDate || null,
+        batchExpireDate: draft.batchExpireDate || null,
+        completionNotes: draft.completionNotes.trim() || null,
       });
-      persistMedicines();
-      persistPurchases();
+      isCompleteOpen = false;
+      completingPurchaseId = null;
       notify();
     },
 

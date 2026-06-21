@@ -2,7 +2,7 @@ import './style.css';
 import { store } from './store';
 import { exportToCsv } from './utils/csv';
 import { filterMedicines, getUniqueCategories, getUniqueLocations, getUniqueMonths } from './utils/filter';
-import { validateMedicines, getIssuesByMedicineId, getQuantityStatus, validatePurchases } from './utils/validation';
+import { validateMedicines, getIssuesByMedicineId, getQuantityStatus, validatePurchases, getInboundQuantity, getInboundDate } from './utils/validation';
 import { getExpireStatus, daysBetween, parseDate } from './utils/date';
 import {
   STATUS_LABELS,
@@ -137,12 +137,16 @@ function getStats(medicines: Medicine[], purchases: PurchaseItem[]) {
   const lowCount = medicines.filter((m) => getQuantityStatus(m) !== 'sufficient').length;
   const pendingPurchase = purchases.filter((p) => !p.completed).length;
   const completedPurchase = purchases.filter((p) => p.completed).length;
+  const totalInbound = purchases
+    .filter((p) => p.completed)
+    .reduce((sum, p) => sum + getInboundQuantity(p), 0);
   return {
     total: medicines.length,
     expiring: expiringCount,
     low: lowCount,
     pendingPurchase,
     completedPurchase,
+    totalInbound,
   };
 }
 
@@ -179,6 +183,7 @@ function renderStats(container: HTMLElement) {
     { label: '库存不足', value: stats.low, iconName: 'package', iconClass: 'stat-icon-low' },
     { label: '待补购', value: stats.pendingPurchase, iconName: 'shopping-cart', iconClass: 'stat-icon-purchase', onClick: () => applyPurchaseFilter('pending') },
     { label: '已完成补购', value: stats.completedPurchase, iconName: 'check-check', iconClass: 'stat-icon-done', onClick: () => applyPurchaseFilter('completed') },
+    { label: '累计入库量', value: stats.totalInbound, iconName: 'inbox', iconClass: 'stat-icon-inbound' },
   ];
 
   const grid = h('div', { class: 'stats-grid' });
@@ -406,12 +411,10 @@ function renderPurchaseCell(m: Medicine): HTMLElement {
   } else if (status === 'pending' && pending) {
     wrap.appendChild(h('span', { class: `badge ${getPurchaseBadgeClass(status)}` }, ['待补购']));
     wrap.appendChild(h('span', { class: `badge ${getPriorityBadgeClass(pending.priority)}` }, [PURCHASE_PRIORITY_LABELS[pending.priority]]));
-    const doneBtn = h('button', { class: 'btn btn-sm btn-success purchase-action', title: '标记已买并回填库存' }, [icon('check')]);
+    const doneBtn = h('button', { class: 'btn btn-sm btn-success purchase-action', title: '补购入库并回填库存' }, [icon('check')]);
     doneBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm(`确认已购买？将补购数量 ${pending.quantity} 回填到库存并更新状态。`)) {
-        store.markPurchased(pending.id);
-      }
+      store.openComplete(pending.id);
     });
     wrap.appendChild(doneBtn);
     const cancelBtn = h('button', { class: 'btn btn-ghost btn-sm purchase-action', title: '取消补购' }, [icon('x')]);
@@ -423,8 +426,12 @@ function renderPurchaseCell(m: Medicine): HTMLElement {
   } else {
     const latest = store.getLatestPurchaseByMedicineId(m.id);
     wrap.appendChild(h('span', { class: `badge ${getPurchaseBadgeClass(status)}` }, ['已补购']));
-    if (latest && latest.completedAt) {
-      wrap.appendChild(h('span', { class: 'purchase-date' }, [latest.completedAt]));
+    if (latest) {
+      const inboundDate = getInboundDate(latest);
+      if (inboundDate) wrap.appendChild(h('span', { class: 'purchase-date' }, [inboundDate]));
+      if (typeof latest.actualQuantity === 'number') {
+        wrap.appendChild(h('span', { class: 'purchase-date' }, [`入库 ${latest.actualQuantity}`]));
+      }
     }
   }
 
@@ -664,19 +671,22 @@ function renderMonthlyView(container: HTMLElement) {
         actionRow.appendChild(h('span', { class: 'monthly-action-text' }, [
           `计划 ${pending.plannedDate || '未定日期'}`,
         ]));
-        const doneBtn = h('button', { class: 'btn btn-sm btn-success monthly-action-btn' }, [icon('check'), '标记已买']);
+        const doneBtn = h('button', { class: 'btn btn-sm btn-success monthly-action-btn' }, [icon('check'), '补购入库']);
         doneBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          if (confirm(`确认已购买？将补购数量 ${pending.quantity} 回填到库存并更新状态。`)) {
-            store.markPurchased(pending.id);
-          }
+          store.openComplete(pending.id);
         });
         actionRow.appendChild(doneBtn);
       } else if (pStatus === 'completed') {
         const latest = store.getLatestPurchaseByMedicineId(m.id);
         actionRow.appendChild(h('span', { class: 'badge badge-primary' }, ['已补购']));
-        if (latest && latest.completedAt) {
-          actionRow.appendChild(h('span', { class: 'monthly-action-text' }, [`完成于 ${latest.completedAt}`]));
+        if (latest) {
+          const inboundQty = getInboundQuantity(latest);
+          const inboundDate = getInboundDate(latest);
+          const parts = [`入库 ${inboundQty}`];
+          if (inboundDate) parts.push(inboundDate);
+          if (latest.batchExpireDate) parts.push(`批次到期 ${latest.batchExpireDate}`);
+          actionRow.appendChild(h('span', { class: 'monthly-action-text' }, [parts.join(' · ')]));
         }
         const againBtn = h('button', { class: 'btn btn-sm btn-secondary monthly-action-btn' }, [icon('shopping-cart'), '再次补购']);
         againBtn.addEventListener('click', (e) => { e.stopPropagation(); store.addToPurchase(m.id); });
@@ -718,7 +728,7 @@ function buildPurchaseSection(medicineId: string): HTMLElement {
   if (status === 'pending' && pending) {
     section.appendChild(h('div', { class: 'purchase-hint' }, [
       icon('info'),
-      ' 标记已买将把补购数量回填到药品库存，并将使用状态更新为「已补购」',
+      ' 点击「补购入库」可填写本次实际入库数量、购买日期、批次到期日期与备注，完成后自动回填库存并更新状态',
     ]));
 
     section.appendChild(h('div', { class: 'form-row' }, [
@@ -765,11 +775,9 @@ function buildPurchaseSection(medicineId: string): HTMLElement {
     ]));
 
     const actions = h('div', { class: 'purchase-actions' });
-    const doneBtn = h('button', { class: 'btn btn-success' }, [icon('check'), '标记已买']);
+    const doneBtn = h('button', { class: 'btn btn-success' }, [icon('check'), '补购入库']);
     doneBtn.addEventListener('click', () => {
-      if (confirm(`确认已购买？将补购数量 ${pending.quantity} 回填到库存并更新状态。`)) {
-        store.markPurchased(pending.id);
-      }
+      store.openComplete(pending.id);
     });
     actions.appendChild(doneBtn);
     const cancelBtn = h('button', { class: 'btn btn-ghost' }, [icon('x'), '取消补购']);
@@ -780,9 +788,14 @@ function buildPurchaseSection(medicineId: string): HTMLElement {
     section.appendChild(actions);
   } else {
     if (status === 'completed' && latest) {
+      const inboundQty = getInboundQuantity(latest);
+      const inboundDate = getInboundDate(latest);
+      const hintParts = [`最近入库 ${inboundQty} 件`];
+      if (inboundDate) hintParts.push(`购买日期 ${inboundDate}`);
+      if (latest.batchExpireDate) hintParts.push(`批次到期 ${latest.batchExpireDate}`);
       section.appendChild(h('div', { class: 'purchase-hint' }, [
         icon('info'),
-        ` 上次补购已于 ${latest.completedAt || '—'} 完成，补购数量 ${latest.quantity}`,
+        ` ${hintParts.join('，')}`,
       ]));
     } else {
       section.appendChild(h('div', { class: 'purchase-hint' }, [
@@ -801,27 +814,44 @@ function buildPurchaseSection(medicineId: string): HTMLElement {
   if (completedHistory.length > 0) {
     section.appendChild(h('div', { class: 'purchase-history-header' }, [
       icon('history'),
-      h('span', { class: 'purchase-history-title' }, [`补购历史（共 ${completedHistory.length} 条）`]),
+      h('span', { class: 'purchase-history-title' }, [`补购入库记录（共 ${completedHistory.length} 条）`]),
     ]));
     const historyList = h('div', { class: 'purchase-history-list' });
-    for (const p of completedHistory) {
+    completedHistory.forEach((p, idx) => {
+      const inboundQty = getInboundQuantity(p);
+      const inboundDate = getInboundDate(p);
+      const quantityText = typeof p.actualQuantity === 'number' && p.actualQuantity !== p.quantity
+        ? `入库 ${inboundQty}（计划 ${p.quantity}）`
+        : `入库 ${inboundQty}`;
+      const dateRow = h('div', { class: 'purchase-history-date' }, [
+        icon('calendar-check'),
+        ` ${inboundDate || '未知日期'}`,
+      ]);
+      if (idx === 0) {
+        dateRow.appendChild(h('span', { class: 'badge badge-primary', style: { marginLeft: '8px' } }, ['最近']));
+      }
       const row = h('div', { class: 'purchase-history-row' }, [
-        h('div', { class: 'purchase-history-date' }, [
-          icon('calendar-check'),
-          ` ${p.completedAt || '未知日期'}`,
-        ]),
+        dateRow,
         h('div', { class: 'purchase-history-meta' }, [
           h('span', { class: `badge ${getPriorityBadgeClass(p.priority)}` }, [PURCHASE_PRIORITY_LABELS[p.priority]]),
-          h('span', { class: 'purchase-history-quantity' }, [`补购 ${p.quantity}`]),
+          h('span', { class: 'purchase-history-quantity' }, [quantityText]),
           p.plannedDate ? h('span', { class: 'purchase-history-sub' }, [`计划 ${p.plannedDate}`]) : null,
+          p.batchExpireDate ? h('span', { class: 'purchase-history-sub' }, [`批次到期 ${p.batchExpireDate}`]) : null,
         ]),
-        p.notes ? h('div', { class: 'purchase-history-notes', title: p.notes }, [
-          icon('message-square'),
-          ` ${p.notes}`,
-        ]) : null,
+        p.completionNotes
+          ? h('div', { class: 'purchase-history-notes', title: p.completionNotes }, [
+              icon('message-square'),
+              ` ${p.completionNotes}`,
+            ])
+          : p.notes
+            ? h('div', { class: 'purchase-history-notes', title: p.notes }, [
+                icon('message-square'),
+                ` ${p.notes}`,
+              ])
+            : null,
       ]);
       historyList.appendChild(row);
-    }
+    });
     section.appendChild(historyList);
   }
 
@@ -998,6 +1028,99 @@ function renderDetailPanel(container: HTMLElement) {
   if (window.lucide) window.lucide.createIcons();
 }
 
+function renderCompleteModal(container: HTMLElement) {
+  const isOpen = store.getIsCompleteOpen();
+  const purchase = store.getCompletingPurchase();
+  const draft = store.getCompleteDraft();
+  container.innerHTML = '';
+
+  const overlay = h('div', { class: `modal-overlay ${isOpen ? 'open' : ''}` });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) store.closeComplete();
+  });
+
+  const modal = h('div', { class: 'modal-card' });
+  if (isOpen && purchase) {
+    const medicine = store.getMedicines().find((m) => m.id === purchase.medicineId);
+
+    modal.appendChild(h('div', { class: 'modal-header' }, [
+      h('div', { class: 'modal-title' }, [icon('package-check'), '补购入库']),
+      (() => {
+        const btn = h('button', { class: 'detail-panel-close' }, [icon('x')]);
+        btn.addEventListener('click', () => store.closeComplete());
+        return btn;
+      })(),
+    ]));
+
+    const body = h('div', { class: 'modal-body' });
+    body.appendChild(h('div', { class: 'modal-context' }, [
+      h('div', { style: { fontWeight: 600, color: 'var(--color-gray-900)' } }, [medicine?.name || '药品']),
+      h('div', { style: { marginTop: '4px' } }, [
+        `计划补购 ${purchase.quantity} 件 · 优先级 ${PURCHASE_PRIORITY_LABELS[purchase.priority]}`,
+      ]),
+    ]));
+
+    body.appendChild(h('div', { class: 'form-group' }, [
+      h('label', { class: 'form-label' }, ['实际入库数量']),
+      (() => {
+        const input = h('input', {
+          class: 'form-input',
+          type: 'number',
+          min: '0',
+          value: draft.actualQuantity,
+          placeholder: '留空则使用计划补购数量',
+        }) as HTMLInputElement;
+        input.addEventListener('input', (e) => store.updateCompleteField('actualQuantity', (e.target as HTMLInputElement).value));
+        return input;
+      })(),
+    ]));
+
+    body.appendChild(h('div', { class: 'form-row' }, [
+      h('div', { class: 'form-group' }, [
+        h('label', { class: 'form-label' }, ['实际购买日期']),
+        (() => {
+          const input = h('input', { class: 'form-input', type: 'date', value: draft.actualPurchaseDate }) as HTMLInputElement;
+          input.addEventListener('input', (e) => store.updateCompleteField('actualPurchaseDate', (e.target as HTMLInputElement).value));
+          return input;
+        })(),
+      ]),
+      h('div', { class: 'form-group' }, [
+        h('label', { class: 'form-label' }, ['批次到期日期']),
+        (() => {
+          const input = h('input', { class: 'form-input', type: 'date', value: draft.batchExpireDate }) as HTMLInputElement;
+          input.addEventListener('input', (e) => store.updateCompleteField('batchExpireDate', (e.target as HTMLInputElement).value));
+          return input;
+        })(),
+      ]),
+    ]));
+
+    body.appendChild(h('div', { class: 'form-group' }, [
+      h('label', { class: 'form-label' }, ['入库备注']),
+      (() => {
+        const ta = h('textarea', { class: 'form-textarea', placeholder: '可记录购买渠道、价格、规格差异等...' }) as HTMLTextAreaElement;
+        ta.value = draft.completionNotes;
+        ta.addEventListener('input', (e) => store.updateCompleteField('completionNotes', (e.target as HTMLTextAreaElement).value));
+        return ta;
+      })(),
+    ]));
+
+    modal.appendChild(body);
+
+    const footer = h('div', { class: 'modal-footer' });
+    const cancelBtn = h('button', { class: 'btn btn-secondary' }, ['取消']);
+    cancelBtn.addEventListener('click', () => store.closeComplete());
+    footer.appendChild(cancelBtn);
+    const confirmBtn = h('button', { class: 'btn btn-success' }, [icon('check'), '确认入库']);
+    confirmBtn.addEventListener('click', () => store.confirmComplete());
+    footer.appendChild(confirmBtn);
+    modal.appendChild(footer);
+  }
+
+  overlay.appendChild(modal);
+  container.appendChild(overlay);
+  if (window.lucide) window.lucide.createIcons();
+}
+
 function render() {
   app.innerHTML = '';
 
@@ -1066,6 +1189,10 @@ function render() {
   const panelContainer = h('div');
   renderDetailPanel(panelContainer);
   app.appendChild(panelContainer);
+
+  const completeContainer = h('div');
+  renderCompleteModal(completeContainer);
+  app.appendChild(completeContainer);
 
   if (window.lucide) window.lucide.createIcons();
 }
