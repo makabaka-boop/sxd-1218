@@ -7,9 +7,10 @@ export function getQuantityStatus(m: Medicine): QuantityStatus {
   return 'sufficient';
 }
 
-export function getMedicinePurchaseStatus(medicineId: string, purchases: PurchaseItem[]): MedicinePurchaseStatus {
+export function getMedicinePurchaseStatus(medicineId: string, purchases: PurchaseItem[], medicines: Medicine[] = []): MedicinePurchaseStatus {
   if (purchases.some((p) => p.medicineId === medicineId && !p.completed)) return 'pending';
-  if (purchases.some((p) => p.medicineId === medicineId && p.completed)) return 'completed';
+  const m = medicines.find((x) => x.id === medicineId);
+  if (m && m.status === 'purchased') return 'completed';
   return 'none';
 }
 

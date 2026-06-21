@@ -38,7 +38,7 @@ export function exportToCsv(medicines: Medicine[], purchases: PurchaseItem[] = [
 
   const rows = medicines.map((m) => {
     const purchase = getActivePurchaseForMedicine(m.id, purchases);
-    const purchaseStatus = getMedicinePurchaseStatus(m.id, purchases);
+    const purchaseStatus = getMedicinePurchaseStatus(m.id, purchases, medicines);
     return [
       m.name,
       m.category,

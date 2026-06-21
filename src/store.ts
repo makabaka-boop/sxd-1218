@@ -7,7 +7,7 @@ import type {
   FilterState,
 } from './types';
 import { storage } from './storage';
-import { getTodayStr, formatDate } from './utils/date';
+import { getTodayStr, formatDate, getExpireStatus } from './utils/date';
 import { filterMedicines } from './utils/filter';
 
 type Listener = () => void;
@@ -30,6 +30,25 @@ function defaultPlannedDate(): string {
   const d = new Date();
   d.setDate(d.getDate() + 7);
   return formatDate(d);
+}
+
+function deriveMedicineStatus(
+  current: MedicineStatus,
+  remainingQuantity: number,
+  minimumQuantity: number,
+  expireDate: string,
+  hasOtherPending: boolean
+): MedicineStatus {
+  if (current === 'stopped') return 'stopped';
+  if (hasOtherPending) return 'to_purchase';
+  if (remainingQuantity <= 0 || remainingQuantity < minimumQuantity) {
+    return 'to_purchase';
+  }
+  const es = getExpireStatus(expireDate);
+  if (es === 'expired' || es === 'expiring_soon') {
+    return 'attention';
+  }
+  return 'normal';
 }
 
 function createStore() {
@@ -86,9 +105,18 @@ function createStore() {
       );
     },
 
+    getAllPurchasesByMedicineId(id: string): PurchaseItem[] {
+      return purchaseItems
+        .filter((p) => p.medicineId === id)
+        .sort((a, b) =>
+          (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt)
+        );
+    },
+
     getMedicinePurchaseStatus(id: string): MedicinePurchaseStatus {
       if (purchaseItems.some((p) => p.medicineId === id && !p.completed)) return 'pending';
-      if (purchaseItems.some((p) => p.medicineId === id && p.completed)) return 'completed';
+      const m = medicines.find((x) => x.id === id);
+      if (m && m.status === 'purchased') return 'completed';
       return 'none';
     },
 
@@ -303,12 +331,27 @@ function createStore() {
       purchaseItems = purchaseItems.filter((p) => p.id !== id);
       if (!item.completed && item.medicineId) {
         const now = getTodayStr();
-        medicines = medicines.map((m) =>
-          m.id === item.medicineId && m.status === 'to_purchase'
-            ? { ...m, status: 'normal' as MedicineStatus, updatedAt: now }
-            : m
-        );
-        persistMedicines();
+        const m = medicines.find((x) => x.id === item.medicineId);
+        if (m) {
+          const hasOtherPending = purchaseItems.some(
+            (p) => p.medicineId === item.medicineId && !p.completed
+          );
+          const nextStatus = deriveMedicineStatus(
+            m.status,
+            m.remainingQuantity,
+            m.minimumQuantity,
+            m.expireDate,
+            hasOtherPending
+          );
+          if (nextStatus !== m.status) {
+            medicines = medicines.map((x) =>
+              x.id === item.medicineId
+                ? { ...x, status: nextStatus, updatedAt: now }
+                : x
+            );
+            persistMedicines();
+          }
+        }
       }
       persistPurchases();
       notify();

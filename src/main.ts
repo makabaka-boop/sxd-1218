@@ -705,6 +705,8 @@ function buildPurchaseSection(medicineId: string): HTMLElement {
   const status = store.getMedicinePurchaseStatus(medicineId);
   const pending = store.getPendingPurchaseByMedicineId(medicineId);
   const latest = store.getLatestPurchaseByMedicineId(medicineId);
+  const allPurchases = store.getAllPurchasesByMedicineId(medicineId);
+  const completedHistory = allPurchases.filter((p) => p.completed);
 
   const section = h('div', { class: 'purchase-section' });
   section.appendChild(h('div', { class: 'purchase-section-header' }, [
@@ -794,6 +796,33 @@ function buildPurchaseSection(medicineId: string): HTMLElement {
     ]);
     addBtn.addEventListener('click', () => store.addToPurchase(medicineId));
     section.appendChild(h('div', { class: 'purchase-actions' }, [addBtn]));
+  }
+
+  if (completedHistory.length > 0) {
+    section.appendChild(h('div', { class: 'purchase-history-header' }, [
+      icon('history'),
+      h('span', { class: 'purchase-history-title' }, [`补购历史（共 ${completedHistory.length} 条）`]),
+    ]));
+    const historyList = h('div', { class: 'purchase-history-list' });
+    for (const p of completedHistory) {
+      const row = h('div', { class: 'purchase-history-row' }, [
+        h('div', { class: 'purchase-history-date' }, [
+          icon('calendar-check'),
+          ` ${p.completedAt || '未知日期'}`,
+        ]),
+        h('div', { class: 'purchase-history-meta' }, [
+          h('span', { class: `badge ${getPriorityBadgeClass(p.priority)}` }, [PURCHASE_PRIORITY_LABELS[p.priority]]),
+          h('span', { class: 'purchase-history-quantity' }, [`补购 ${p.quantity}`]),
+          p.plannedDate ? h('span', { class: 'purchase-history-sub' }, [`计划 ${p.plannedDate}`]) : null,
+        ]),
+        p.notes ? h('div', { class: 'purchase-history-notes', title: p.notes }, [
+          icon('message-square'),
+          ` ${p.notes}`,
+        ]) : null,
+      ]);
+      historyList.appendChild(row);
+    }
+    section.appendChild(historyList);
   }
 
   return section;

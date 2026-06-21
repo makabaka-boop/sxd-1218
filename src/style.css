@@ -657,6 +657,86 @@ input, select, textarea {
   margin-top: 4px;
 }
 
+.purchase-history-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 24px;
+  margin-bottom: 12px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--color-gray-200);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-gray-700);
+}
+
+.purchase-history-title {
+  font-weight: 600;
+}
+
+.purchase-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.purchase-history-row {
+  background: white;
+  border: 1px solid var(--color-gray-200);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.purchase-history-date {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-success);
+}
+
+.purchase-history-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--color-gray-600);
+}
+
+.purchase-history-quantity {
+  font-weight: 500;
+  color: var(--color-gray-800);
+}
+
+.purchase-history-sub {
+  color: var(--color-gray-400);
+}
+
+.purchase-history-notes {
+  font-size: 12px;
+  color: var(--color-gray-500);
+  padding-top: 4px;
+  border-top: 1px dashed var(--color-gray-100);
+  margin-top: 2px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  display: -webkit-box;
+}
+
+.purchase-history-notes i {
+  display: inline-block;
+  vertical-align: -3px;
+  margin-right: 4px;
+}
+
 @media (max-width: 1024px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .detail-panel { width: 100%; }
