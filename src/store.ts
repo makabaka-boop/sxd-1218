@@ -1,6 +1,13 @@
-import type { Medicine, MedicineStatus, FilterState } from './types';
+import type {
+  Medicine,
+  MedicineStatus,
+  MedicinePurchaseStatus,
+  PurchaseItem,
+  PurchasePriority,
+  FilterState,
+} from './types';
 import { storage } from './storage';
-import { getTodayStr } from './utils/date';
+import { getTodayStr, formatDate } from './utils/date';
 import { filterMedicines } from './utils/filter';
 
 type Listener = () => void;
@@ -15,11 +22,19 @@ const defaultFilters: FilterState = {
   quantityStatus: '',
   storageLocation: '',
   status: '',
+  purchaseStatus: '',
   search: '',
 };
 
+function defaultPlannedDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 7);
+  return formatDate(d);
+}
+
 function createStore() {
-  let medicines: Medicine[] = storage.load();
+  let medicines: Medicine[] = storage.loadMedicines();
+  let purchaseItems: PurchaseItem[] = storage.loadPurchases();
   let selectedIds = new Set<string>();
   let filters: FilterState = { ...defaultFilters };
   let isMonthlyView = false;
@@ -34,8 +49,12 @@ function createStore() {
     for (const l of listeners) l();
   }
 
-  function persist() {
-    storage.save(medicines);
+  function persistMedicines() {
+    storage.saveMedicines(medicines);
+  }
+
+  function persistPurchases() {
+    storage.savePurchases(purchaseItems);
   }
 
   return {
@@ -45,6 +64,7 @@ function createStore() {
     },
 
     getMedicines() { return medicines; },
+    getPurchaseItems() { return purchaseItems; },
     getSelectedIds() { return selectedIds; },
     getFilters() { return filters; },
     getIsMonthlyView() { return isMonthlyView; },
@@ -53,6 +73,24 @@ function createStore() {
     getEditingMedicine() { return editingMedicine; },
     getSortField() { return sortField; },
     getSortAsc() { return sortAsc; },
+
+    getPendingPurchaseByMedicineId(id: string): PurchaseItem | null {
+      return purchaseItems.find((p) => p.medicineId === id && !p.completed) || null;
+    },
+
+    getLatestPurchaseByMedicineId(id: string): PurchaseItem | null {
+      const items = purchaseItems.filter((p) => p.medicineId === id);
+      if (items.length === 0) return null;
+      return items.reduce((latest, p) =>
+        (p.updatedAt || p.createdAt) > (latest.updatedAt || latest.createdAt) ? p : latest
+      );
+    },
+
+    getMedicinePurchaseStatus(id: string): MedicinePurchaseStatus {
+      if (purchaseItems.some((p) => p.medicineId === id && !p.completed)) return 'pending';
+      if (purchaseItems.some((p) => p.medicineId === id && p.completed)) return 'completed';
+      return 'none';
+    },
 
     setSort(field: keyof Medicine) {
       if (sortField === field) {
@@ -67,7 +105,7 @@ function createStore() {
     setFilters(f: Partial<FilterState>) {
       filters = { ...filters, ...f };
       const visibleIds = new Set(
-        filterMedicines(medicines, filters).map((m) => m.id)
+        filterMedicines(medicines, filters, purchaseItems).map((m) => m.id)
       );
       let changed = false;
       const next = new Set<string>();
@@ -84,7 +122,13 @@ function createStore() {
 
     initWithData(data: Medicine[]) {
       medicines = data;
-      persist();
+      persistMedicines();
+      notify();
+    },
+
+    initPurchaseData(data: PurchaseItem[]) {
+      purchaseItems = data;
+      persistPurchases();
       notify();
     },
 
@@ -176,7 +220,7 @@ function createStore() {
         };
         medicines = [newMed, ...medicines];
       }
-      persist();
+      persistMedicines();
       isFormOpen = false;
       detailMedicineId = null;
       editingMedicine = null;
@@ -185,6 +229,8 @@ function createStore() {
 
     deleteMedicine(id: string) {
       medicines = medicines.filter((m) => m.id !== id);
+      const hadPurchases = purchaseItems.some((p) => p.medicineId === id);
+      purchaseItems = purchaseItems.filter((p) => p.medicineId !== id);
       if (selectedIds.has(id)) {
         const next = new Set(selectedIds);
         next.delete(id);
@@ -195,7 +241,8 @@ function createStore() {
         editingMedicine = null;
         isFormOpen = false;
       }
-      persist();
+      persistMedicines();
+      if (hadPurchases) persistPurchases();
       notify();
     },
 
@@ -204,7 +251,124 @@ function createStore() {
       medicines = medicines.map((m) =>
         ids.includes(m.id) ? { ...m, status, updatedAt: now } : m
       );
-      persist();
+      persistMedicines();
+      selectedIds = new Set();
+      notify();
+    },
+
+    addToPurchase(medicineId: string) {
+      const m = medicines.find((x) => x.id === medicineId);
+      if (!m) return;
+      const existing = purchaseItems.find((p) => p.medicineId === medicineId && !p.completed);
+      if (existing) {
+        notify();
+        return;
+      }
+      const now = getTodayStr();
+      const newItem: PurchaseItem = {
+        id: genId(),
+        medicineId,
+        quantity: Math.max(m.minimumQuantity, 1),
+        priority: 'medium',
+        notes: '',
+        plannedDate: defaultPlannedDate(),
+        completed: false,
+        completedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      purchaseItems = [newItem, ...purchaseItems];
+      medicines = medicines.map((x) =>
+        x.id === medicineId && x.status !== 'stopped'
+          ? { ...x, status: 'to_purchase' as MedicineStatus, updatedAt: now }
+          : x
+      );
+      persistMedicines();
+      persistPurchases();
+      notify();
+    },
+
+    updatePurchaseField<K extends keyof PurchaseItem>(id: string, field: K, value: PurchaseItem[K]) {
+      const now = getTodayStr();
+      purchaseItems = purchaseItems.map((p) =>
+        p.id === id ? { ...p, [field]: value, updatedAt: now } : p
+      );
+      persistPurchases();
+      notify();
+    },
+
+    removePurchase(id: string) {
+      const item = purchaseItems.find((p) => p.id === id);
+      if (!item) return;
+      purchaseItems = purchaseItems.filter((p) => p.id !== id);
+      if (!item.completed && item.medicineId) {
+        const now = getTodayStr();
+        medicines = medicines.map((m) =>
+          m.id === item.medicineId && m.status === 'to_purchase'
+            ? { ...m, status: 'normal' as MedicineStatus, updatedAt: now }
+            : m
+        );
+        persistMedicines();
+      }
+      persistPurchases();
+      notify();
+    },
+
+    markPurchased(id: string) {
+      const item = purchaseItems.find((p) => p.id === id);
+      if (!item || item.completed) return;
+      const now = getTodayStr();
+      purchaseItems = purchaseItems.map((p) =>
+        p.id === id
+          ? { ...p, completed: true, completedAt: now, updatedAt: now }
+          : p
+      );
+      medicines = medicines.map((m) => {
+        if (m.id !== item.medicineId) return m;
+        const remaining = m.remainingQuantity + item.quantity;
+        const status: MedicineStatus = m.status === 'stopped' ? m.status : 'purchased';
+        return { ...m, remainingQuantity: remaining, status, updatedAt: now };
+      });
+      persistMedicines();
+      persistPurchases();
+      notify();
+    },
+
+    batchAddToPurchase(ids: string[]) {
+      const now = getTodayStr();
+      const plannedDate = defaultPlannedDate();
+      const idSet = new Set(ids);
+      const existingPending = new Set(
+        purchaseItems.filter((p) => !p.completed).map((p) => p.medicineId)
+      );
+      const newItems: PurchaseItem[] = [];
+      for (const id of ids) {
+        if (existingPending.has(id)) continue;
+        const m = medicines.find((x) => x.id === id);
+        if (!m) continue;
+        newItems.push({
+          id: genId(),
+          medicineId: id,
+          quantity: Math.max(m.minimumQuantity, 1),
+          priority: 'medium' as PurchasePriority,
+          notes: '',
+          plannedDate,
+          completed: false,
+          completedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      if (newItems.length > 0) {
+        purchaseItems = [...newItems, ...purchaseItems];
+        medicines = medicines.map((m) =>
+          idSet.has(m.id) && m.status !== 'stopped'
+            ? { ...m, status: 'to_purchase' as MedicineStatus, updatedAt: now }
+            : m
+        );
+        persistMedicines();
+        persistPurchases();
+      }
       selectedIds = new Set();
       notify();
     },

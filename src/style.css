@@ -90,6 +90,12 @@ input, select, textarea {
   color: white;
 }
 
+.btn-success {
+  background: var(--color-success);
+  color: white;
+}
+.btn-success:hover { background: #059669; }
+
 .btn-sm { padding: 6px 12px; font-size: 13px; }
 
 .btn-ghost {
@@ -155,7 +161,7 @@ input, select, textarea {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -166,9 +172,14 @@ input, select, textarea {
   padding: 20px;
   box-shadow: var(--shadow-sm);
   border: 1px solid var(--color-gray-100);
-  transition: transform 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+
+.stat-card-clickable {
+  cursor: pointer;
+}
+.stat-card-clickable:hover { border-color: var(--color-primary); }
 
 .stat-card-header {
   display: flex;
@@ -188,7 +199,8 @@ input, select, textarea {
 .stat-icon-total { background: var(--color-primary-light); color: var(--color-primary); }
 .stat-icon-expiring { background: var(--color-warning-light); color: var(--color-warning); }
 .stat-icon-low { background: var(--color-danger-light); color: var(--color-danger); }
-.stat-icon-purchase { background: var(--color-success-light); color: var(--color-success); }
+.stat-icon-purchase { background: var(--color-warning-light); color: var(--color-warning); }
+.stat-icon-done { background: var(--color-success-light); color: var(--color-success); }
 
 .stat-value {
   font-size: 28px;
@@ -261,6 +273,13 @@ input, select, textarea {
   font-weight: 600;
   color: var(--color-primary-dark);
   margin-right: 8px;
+}
+
+.batch-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--color-gray-300);
+  margin: 0 4px;
 }
 
 .table-container {
@@ -560,6 +579,84 @@ input, select, textarea {
   font-size: 10px;
 }
 
+.purchase-cell {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.purchase-action {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.purchase-date {
+  font-size: 12px;
+  color: var(--color-gray-500);
+}
+
+.monthly-card-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--color-gray-200);
+}
+
+.monthly-action-text {
+  font-size: 12px;
+  color: var(--color-gray-500);
+  margin-right: auto;
+}
+
+.monthly-action-btn {
+  margin-left: auto;
+}
+
+.purchase-section {
+  margin-top: 8px;
+  padding: 16px;
+  background: var(--color-gray-50);
+  border: 1px solid var(--color-gray-200);
+  border-radius: var(--radius-md);
+}
+
+.purchase-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.purchase-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-gray-800);
+  margin-right: auto;
+}
+
+.purchase-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-gray-500);
+  background: white;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.purchase-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
 @media (max-width: 1024px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .detail-panel { width: 100%; }
@@ -576,4 +673,5 @@ input, select, textarea {
   .form-row { grid-template-columns: 1fr; }
   .batch-bar { flex-wrap: wrap; }
   .table-container { overflow-x: auto; }
+  .monthly-action-text { margin-right: 0; width: 100%; }
 }

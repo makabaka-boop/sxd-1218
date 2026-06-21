@@ -1,4 +1,4 @@
-import type { Medicine } from '../types';
+import type { Medicine, PurchaseItem } from '../types';
 
 function daysFromNow(n: number): string {
   const d = new Date();
@@ -78,7 +78,7 @@ export function getSampleData(): Medicine[] {
       expireDate: daysFromNow(180),
       storageLocation: '卧室床头柜',
       usageNotes: '缓解过敏性鼻炎、荨麻疹等过敏症状。每日1片。',
-      status: 'normal',
+      status: 'purchased',
       createdAt: now,
       updatedAt: now,
     },
@@ -151,6 +151,48 @@ export function getSampleData(): Medicine[] {
       status: 'normal',
       createdAt: now,
       updatedAt: now,
+    },
+  ];
+}
+
+export function getSamplePurchaseItems(): PurchaseItem[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: 'sample-purchase-1',
+      medicineId: 'sample-3',
+      quantity: 20,
+      priority: 'high',
+      notes: '库存为零，急需补购',
+      plannedDate: daysFromNow(1),
+      completed: false,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 'sample-purchase-2',
+      medicineId: 'sample-7',
+      quantity: 5,
+      priority: 'medium',
+      notes: '日常补购',
+      plannedDate: daysFromNow(5),
+      completed: false,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 'sample-purchase-3',
+      medicineId: 'sample-5',
+      quantity: 4,
+      priority: 'medium',
+      notes: '过敏季前补购，已回填库存',
+      plannedDate: daysFromNow(-12),
+      completed: true,
+      completedAt: daysFromNow(-12),
+      createdAt: now,
+      updatedAt: daysFromNow(-12),
     },
   ];
 }

@@ -1,11 +1,12 @@
-import type { Medicine } from './types';
+import type { Medicine, PurchaseItem } from './types';
 
-const STORAGE_KEY = 'medicine_cabinet_data';
+const MEDICINE_STORAGE_KEY = 'medicine_cabinet_data';
+const PURCHASE_STORAGE_KEY = 'medicine_cabinet_purchases';
 
 export const storage = {
-  load(): Medicine[] {
+  loadMedicines(): Medicine[] {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(MEDICINE_STORAGE_KEY);
       if (!raw) return [];
       const data = JSON.parse(raw);
       return Array.isArray(data) ? data : [];
@@ -14,11 +15,30 @@ export const storage = {
     }
   },
 
-  save(medicines: Medicine[]): void {
+  saveMedicines(medicines: Medicine[]): void {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(medicines));
+      localStorage.setItem(MEDICINE_STORAGE_KEY, JSON.stringify(medicines));
     } catch (e) {
-      console.error('Failed to save to localStorage:', e);
+      console.error('Failed to save medicines to localStorage:', e);
+    }
+  },
+
+  loadPurchases(): PurchaseItem[] {
+    try {
+      const raw = localStorage.getItem(PURCHASE_STORAGE_KEY);
+      if (!raw) return [];
+      const data = JSON.parse(raw);
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  },
+
+  savePurchases(purchases: PurchaseItem[]): void {
+    try {
+      localStorage.setItem(PURCHASE_STORAGE_KEY, JSON.stringify(purchases));
+    } catch (e) {
+      console.error('Failed to save purchases to localStorage:', e);
     }
   },
 };

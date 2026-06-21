@@ -2,16 +2,22 @@ import './style.css';
 import { store } from './store';
 import { exportToCsv } from './utils/csv';
 import { filterMedicines, getUniqueCategories, getUniqueLocations, getUniqueMonths } from './utils/filter';
-import { validateMedicines, getIssuesByMedicineId, getQuantityStatus } from './utils/validation';
+import { validateMedicines, getIssuesByMedicineId, getQuantityStatus, validatePurchases } from './utils/validation';
 import { getExpireStatus, daysBetween, parseDate } from './utils/date';
 import {
   STATUS_LABELS,
   QUANTITY_STATUS_LABELS,
   EXPIRE_STATUS_LABELS,
+  PURCHASE_PRIORITY_LABELS,
+  PURCHASE_STATUS_LABELS,
   type Medicine,
   type MedicineStatus,
+  type PurchaseItem,
+  type PurchasePriority,
+  type MedicinePurchaseStatus,
+  type PurchaseStatusFilter,
 } from './types';
-import { getSampleData } from './utils/sample';
+import { getSampleData, getSamplePurchaseItems } from './utils/sample';
 import { storage } from './storage';
 
 declare global {
@@ -26,6 +32,7 @@ const app = document.getElementById('app')!;
 
 if (store.getMedicines().length === 0) {
   store.initWithData(getSampleData());
+  store.initPurchaseData(getSamplePurchaseItems());
 }
 
 function h(tag: string, attrs: Record<string, any> = {}, children: any[] = []): HTMLElement {
@@ -84,6 +91,18 @@ function getExpireBadgeClass(status: string): string {
   return 'badge-success';
 }
 
+function getPriorityBadgeClass(priority: PurchasePriority): string {
+  if (priority === 'high') return 'badge-danger';
+  if (priority === 'medium') return 'badge-warning';
+  return 'badge-gray';
+}
+
+function getPurchaseBadgeClass(status: MedicinePurchaseStatus): string {
+  if (status === 'pending') return 'badge-warning';
+  if (status === 'completed') return 'badge-primary';
+  return 'badge-gray';
+}
+
 function getHighestSeverityDot(issues: any[]): HTMLElement | null {
   if (issues.length === 0) return null;
   let cls = 'issue-dot-info';
@@ -105,18 +124,25 @@ function sortList(list: Medicine[], field: keyof Medicine, asc: boolean): Medici
   });
 }
 
-function getStats(medicines: Medicine[]) {
+function applyPurchaseFilter(status: PurchaseStatusFilter) {
+  if (store.getIsMonthlyView()) store.toggleMonthlyView();
+  store.setFilters({ purchaseStatus: status });
+}
+
+function getStats(medicines: Medicine[], purchases: PurchaseItem[]) {
   const expiringCount = medicines.filter((m) => {
     const s = getExpireStatus(m.expireDate);
     return s === 'expiring_soon' || s === 'expired';
   }).length;
   const lowCount = medicines.filter((m) => getQuantityStatus(m) !== 'sufficient').length;
-  const purchaseCount = medicines.filter((m) => m.status === 'to_purchase').length;
+  const pendingPurchase = purchases.filter((p) => !p.completed).length;
+  const completedPurchase = purchases.filter((p) => p.completed).length;
   return {
     total: medicines.length,
     expiring: expiringCount,
     low: lowCount,
-    purchase: purchaseCount,
+    pendingPurchase,
+    completedPurchase,
   };
 }
 
@@ -126,7 +152,8 @@ function getMonthlyList(medicines: Medicine[]): Medicine[] {
     const es = getExpireStatus(m.expireDate);
     const qs = getQuantityStatus(m);
     const noNotes = !m.usageNotes || m.usageNotes.trim() === '';
-    return es === 'expiring_soon' || es === 'expired' || qs !== 'sufficient' || noNotes;
+    const pStatus = store.getMedicinePurchaseStatus(m.id);
+    return es === 'expiring_soon' || es === 'expired' || qs !== 'sufficient' || noNotes || pStatus === 'pending';
   });
 }
 
@@ -142,19 +169,21 @@ function groupByCategory(list: Medicine[]): Map<string, Medicine[]> {
 
 function renderStats(container: HTMLElement) {
   const all = store.getMedicines();
-  const stats = getStats(all);
+  const purchases = store.getPurchaseItems();
+  const stats = getStats(all, purchases);
   container.innerHTML = '';
 
-  const cards = [
+  const cards: { label: string; value: number; iconName: string; iconClass: string; onClick?: () => void }[] = [
     { label: '药品总数', value: stats.total, iconName: 'pill-bottle', iconClass: 'stat-icon-total' },
     { label: '临期/过期', value: stats.expiring, iconName: 'clock', iconClass: 'stat-icon-expiring' },
     { label: '库存不足', value: stats.low, iconName: 'package', iconClass: 'stat-icon-low' },
-    { label: '待补购', value: stats.purchase, iconName: 'shopping-cart', iconClass: 'stat-icon-purchase' },
+    { label: '待补购', value: stats.pendingPurchase, iconName: 'shopping-cart', iconClass: 'stat-icon-purchase', onClick: () => applyPurchaseFilter('pending') },
+    { label: '已完成补购', value: stats.completedPurchase, iconName: 'check-check', iconClass: 'stat-icon-done', onClick: () => applyPurchaseFilter('completed') },
   ];
 
   const grid = h('div', { class: 'stats-grid' });
   for (const c of cards) {
-    const card = h('div', { class: 'stat-card' }, [
+    const card = h('div', { class: `stat-card ${c.onClick ? 'stat-card-clickable' : ''}`, onClick: c.onClick }, [
       h('div', { class: 'stat-card-header' }, [
         h('div', { class: 'stat-label' }, [c.label]),
         h('div', { class: `stat-icon ${c.iconClass}` }, [icon(c.iconName as any)]),
@@ -280,6 +309,26 @@ function renderFilterBar(container: HTMLElement) {
     })(),
   ]));
 
+  bar.appendChild(h('div', { class: 'filter-item' }, [
+    h('div', { class: 'filter-label' }, ['补购状态']),
+    (() => {
+      const sel = h('select', { class: 'filter-select' }) as HTMLSelectElement;
+      const options: [string, string][] = [
+        ['', '全部补购'],
+        ['pending', '待补购'],
+        ['completed', '已补购'],
+        ['none', '未加入'],
+      ];
+      for (const [v, l] of options) {
+        const opt = h('option', { value: v }, [l]) as HTMLOptionElement;
+        if (filters.purchaseStatus === v) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener('change', (e) => store.setFilters({ purchaseStatus: (e.target as HTMLSelectElement).value as PurchaseStatusFilter }));
+      return sel;
+    })(),
+  ]));
+
   bar.appendChild(h('div', { class: 'filter-item', style: { alignSelf: 'flex-end' } }, [
     (() => {
       const btn = h('button', { class: 'btn btn-ghost btn-sm' }, [
@@ -305,6 +354,20 @@ function renderBatchBar(container: HTMLElement, visibleIds: string[]) {
     h('span', { class: 'batch-count' }, [`已选 ${count} 项`]),
   ]);
 
+  const purchaseBtn = h('button', { class: 'btn btn-sm btn-warning' }, [
+    icon('shopping-cart'),
+    '加入补购',
+  ]);
+  purchaseBtn.addEventListener('click', () => {
+    if (confirm(`确认将选中的 ${count} 项加入补购清单？`)) {
+      store.batchAddToPurchase(Array.from(selectedIds));
+    }
+  });
+  bar.appendChild(purchaseBtn);
+
+  const divider = h('span', { class: 'batch-divider' });
+  bar.appendChild(divider);
+
   const actions: [MedicineStatus, string, string][] = [
     ['to_purchase', '待补购', 'btn-warning'],
     ['purchased', '已补购', 'btn-primary'],
@@ -327,22 +390,63 @@ function renderBatchBar(container: HTMLElement, visibleIds: string[]) {
   bar.appendChild(clearBtn);
 
   container.appendChild(bar);
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function renderPurchaseCell(m: Medicine): HTMLElement {
+  const td = h('td');
+  const status = store.getMedicinePurchaseStatus(m.id);
+  const pending = store.getPendingPurchaseByMedicineId(m.id);
+  const wrap = h('div', { class: 'purchase-cell' });
+
+  if (status === 'none') {
+    const addBtn = h('button', { class: 'btn btn-ghost btn-sm purchase-action' }, [icon('shopping-cart'), '加入补购']);
+    addBtn.addEventListener('click', (e) => { e.stopPropagation(); store.addToPurchase(m.id); });
+    wrap.appendChild(addBtn);
+  } else if (status === 'pending' && pending) {
+    wrap.appendChild(h('span', { class: `badge ${getPurchaseBadgeClass(status)}` }, ['待补购']));
+    wrap.appendChild(h('span', { class: `badge ${getPriorityBadgeClass(pending.priority)}` }, [PURCHASE_PRIORITY_LABELS[pending.priority]]));
+    const doneBtn = h('button', { class: 'btn btn-sm btn-success purchase-action', title: '标记已买并回填库存' }, [icon('check')]);
+    doneBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm(`确认已购买？将补购数量 ${pending.quantity} 回填到库存并更新状态。`)) {
+        store.markPurchased(pending.id);
+      }
+    });
+    wrap.appendChild(doneBtn);
+    const cancelBtn = h('button', { class: 'btn btn-ghost btn-sm purchase-action', title: '取消补购' }, [icon('x')]);
+    cancelBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm('确认取消此补购项？')) store.removePurchase(pending.id);
+    });
+    wrap.appendChild(cancelBtn);
+  } else {
+    const latest = store.getLatestPurchaseByMedicineId(m.id);
+    wrap.appendChild(h('span', { class: `badge ${getPurchaseBadgeClass(status)}` }, ['已补购']));
+    if (latest && latest.completedAt) {
+      wrap.appendChild(h('span', { class: 'purchase-date' }, [latest.completedAt]));
+    }
+  }
+
+  td.appendChild(wrap);
+  return td;
 }
 
 function renderTable(container: HTMLElement) {
   const all = store.getMedicines();
+  const purchases = store.getPurchaseItems();
   const filters = store.getFilters();
   const sortField = store.getSortField();
   const sortAsc = store.getSortAsc();
   const selected = store.getSelectedIds();
-  const issues = validateMedicines(all);
+  const issues = [...validateMedicines(all), ...validatePurchases(all, purchases)];
   const issuesMap = new Map<string, any[]>();
   for (const i of issues) {
     if (!issuesMap.has(i.medicineId)) issuesMap.set(i.medicineId, []);
     issuesMap.get(i.medicineId)!.push(i);
   }
 
-  let list = filterMedicines(all, filters);
+  let list = filterMedicines(all, filters, purchases);
   list = sortList(list, sortField, sortAsc);
 
   container.innerHTML = '';
@@ -352,14 +456,14 @@ function renderTable(container: HTMLElement) {
       h('div', { class: 'empty-state' }, [
         icon('package-open', 'empty-state-icon'),
         h('div', { class: 'empty-state-title' }, ['暂无药品数据']),
-        h('div', { class: 'empty-state-desc' }, ['点击右上角「新增药品」添加第一条记录']),
+        h('div', { class: 'empty-state-desc' }, ['调整筛选条件，或点击右上角「新增药品」添加记录']),
       ]),
     ]));
     if (window.lucide) window.lucide.createIcons();
     return;
   }
 
-  const cols: { key: keyof Medicine | 'issues' | 'status' | 'quantity' | 'expire' | 'actions'; label: string; width?: string }[] = [
+  const cols: { key: keyof Medicine | 'issues' | 'status' | 'quantity' | 'expire' | 'purchase' | 'actions'; label: string; width?: string }[] = [
     { key: 'issues', label: '', width: '40px' },
     { key: 'name', label: '药品名称' },
     { key: 'category', label: '类别' },
@@ -368,7 +472,8 @@ function renderTable(container: HTMLElement) {
     { key: 'expire', label: '到期日期' },
     { key: 'storageLocation', label: '存放位置' },
     { key: 'status', label: '使用状态' },
-    { key: 'actions', label: '操作' },
+    { key: 'purchase', label: '补购', width: '200px' },
+    { key: 'actions', label: '操作', width: '90px' },
   ];
 
   const wrapper = h('div', { class: 'table-container' });
@@ -390,7 +495,7 @@ function renderTable(container: HTMLElement) {
   for (const c of cols) {
     const th = h('th', {}, [c.label]);
     if (c.width) th.style.width = c.width;
-    if (c.key !== 'issues' && c.key !== 'actions' && c.key !== 'status' && c.key !== 'quantity' && c.key !== 'expire') {
+    if (c.key !== 'issues' && c.key !== 'actions' && c.key !== 'status' && c.key !== 'quantity' && c.key !== 'expire' && c.key !== 'purchase') {
       const sortKey = c.key as keyof Medicine;
       const arrow = h('span', { class: 'sort-arrow' }, [sortField === sortKey ? (sortAsc ? '▲' : '▼') : '↕']);
       th.appendChild(arrow);
@@ -451,6 +556,8 @@ function renderTable(container: HTMLElement) {
     const sBadge = h('span', { class: `badge ${getStatusBadgeClass(m.status)}` }, [STATUS_LABELS[m.status]]);
     row.appendChild(h('td', {}, [sBadge]));
 
+    row.appendChild(renderPurchaseCell(m));
+
     const actionsTd = h('td');
     const editBtn = h('button', { class: 'btn btn-ghost btn-sm' }, [icon('edit'), '编辑']);
     editBtn.addEventListener('click', (e) => {
@@ -471,6 +578,7 @@ function renderTable(container: HTMLElement) {
 
 function renderMonthlyView(container: HTMLElement) {
   const all = store.getMedicines();
+  const purchases = store.getPurchaseItems();
   const list = getMonthlyList(all);
   const grouped = groupByCategory(list);
 
@@ -501,7 +609,12 @@ function renderMonthlyView(container: HTMLElement) {
     for (const m of meds) {
       const es = getExpireStatus(m.expireDate);
       const qs = getQuantityStatus(m);
-      const issues = getIssuesByMedicineId(all, m.id);
+      const issues = [
+        ...getIssuesByMedicineId(all, m.id),
+        ...validatePurchases(all, purchases).filter((i) => i.medicineId === m.id),
+      ];
+      const pStatus = store.getMedicinePurchaseStatus(m.id);
+      const pending = store.getPendingPurchaseByMedicineId(m.id);
 
       const card = h('div', { class: 'monthly-card' });
       card.addEventListener('click', () => store.openDetail(m.id));
@@ -543,6 +656,42 @@ function renderMonthlyView(container: HTMLElement) {
         card.appendChild(issuesEl);
       }
 
+      const actionRow = h('div', { class: 'monthly-card-action' });
+      if (pStatus === 'pending' && pending) {
+        actionRow.appendChild(h('span', { class: `badge ${getPriorityBadgeClass(pending.priority)}` }, [
+          `${PURCHASE_PRIORITY_LABELS[pending.priority]} · 补 ${pending.quantity}`,
+        ]));
+        actionRow.appendChild(h('span', { class: 'monthly-action-text' }, [
+          `计划 ${pending.plannedDate || '未定日期'}`,
+        ]));
+        const doneBtn = h('button', { class: 'btn btn-sm btn-success monthly-action-btn' }, [icon('check'), '标记已买']);
+        doneBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (confirm(`确认已购买？将补购数量 ${pending.quantity} 回填到库存并更新状态。`)) {
+            store.markPurchased(pending.id);
+          }
+        });
+        actionRow.appendChild(doneBtn);
+      } else if (pStatus === 'completed') {
+        const latest = store.getLatestPurchaseByMedicineId(m.id);
+        actionRow.appendChild(h('span', { class: 'badge badge-primary' }, ['已补购']));
+        if (latest && latest.completedAt) {
+          actionRow.appendChild(h('span', { class: 'monthly-action-text' }, [`完成于 ${latest.completedAt}`]));
+        }
+        const againBtn = h('button', { class: 'btn btn-sm btn-secondary monthly-action-btn' }, [icon('shopping-cart'), '再次补购']);
+        againBtn.addEventListener('click', (e) => { e.stopPropagation(); store.addToPurchase(m.id); });
+        actionRow.appendChild(againBtn);
+      } else if (qs !== 'sufficient' || m.status === 'to_purchase') {
+        const addBtn = h('button', { class: 'btn btn-sm btn-warning monthly-action-btn' }, [icon('shopping-cart'), '加入补购清单']);
+        addBtn.addEventListener('click', (e) => { e.stopPropagation(); store.addToPurchase(m.id); });
+        actionRow.appendChild(addBtn);
+      } else {
+        const addBtn = h('button', { class: 'btn btn-sm btn-ghost monthly-action-btn' }, [icon('plus'), '加入补购']);
+        addBtn.addEventListener('click', (e) => { e.stopPropagation(); store.addToPurchase(m.id); });
+        actionRow.appendChild(addBtn);
+      }
+      card.appendChild(actionRow);
+
       cardGrid.appendChild(card);
     }
     section.appendChild(cardGrid);
@@ -552,10 +701,109 @@ function renderMonthlyView(container: HTMLElement) {
   if (window.lucide) window.lucide.createIcons();
 }
 
+function buildPurchaseSection(medicineId: string): HTMLElement {
+  const status = store.getMedicinePurchaseStatus(medicineId);
+  const pending = store.getPendingPurchaseByMedicineId(medicineId);
+  const latest = store.getLatestPurchaseByMedicineId(medicineId);
+
+  const section = h('div', { class: 'purchase-section' });
+  section.appendChild(h('div', { class: 'purchase-section-header' }, [
+    icon('shopping-cart'),
+    h('span', { class: 'purchase-section-title' }, ['补购信息']),
+    h('span', { class: `badge ${getPurchaseBadgeClass(status)}` }, [PURCHASE_STATUS_LABELS[status]]),
+  ]));
+
+  if (status === 'pending' && pending) {
+    section.appendChild(h('div', { class: 'purchase-hint' }, [
+      icon('info'),
+      ' 标记已买将把补购数量回填到药品库存，并将使用状态更新为「已补购」',
+    ]));
+
+    section.appendChild(h('div', { class: 'form-row' }, [
+      h('div', { class: 'form-group' }, [
+        h('label', { class: 'form-label' }, ['补购数量']),
+        (() => {
+          const input = h('input', { class: 'form-input', type: 'number', min: '1', value: String(pending.quantity) }) as HTMLInputElement;
+          input.addEventListener('input', (e) => store.updatePurchaseField(pending.id, 'quantity', Math.max(1, Number((e.target as HTMLInputElement).value) || 1)));
+          return input;
+        })(),
+      ]),
+      h('div', { class: 'form-group' }, [
+        h('label', { class: 'form-label' }, ['优先级']),
+        (() => {
+          const sel = h('select', { class: 'form-select' }) as HTMLSelectElement;
+          for (const [v, l] of Object.entries(PURCHASE_PRIORITY_LABELS)) {
+            const opt = h('option', { value: v }, [l]) as HTMLOptionElement;
+            if (pending.priority === v) opt.selected = true;
+            sel.appendChild(opt);
+          }
+          sel.addEventListener('change', (e) => store.updatePurchaseField(pending.id, 'priority', (e.target as HTMLSelectElement).value as PurchasePriority));
+          return sel;
+        })(),
+      ]),
+    ]));
+
+    section.appendChild(h('div', { class: 'form-group' }, [
+      h('label', { class: 'form-label' }, ['计划购买日期']),
+      (() => {
+        const input = h('input', { class: 'form-input', type: 'date', value: pending.plannedDate }) as HTMLInputElement;
+        input.addEventListener('input', (e) => store.updatePurchaseField(pending.id, 'plannedDate', (e.target as HTMLInputElement).value));
+        return input;
+      })(),
+    ]));
+
+    section.appendChild(h('div', { class: 'form-group' }, [
+      h('label', { class: 'form-label' }, ['补购备注']),
+      (() => {
+        const ta = h('textarea', { class: 'form-textarea', placeholder: '备注补购渠道、规格偏好等...' }) as HTMLTextAreaElement;
+        ta.value = pending.notes;
+        ta.addEventListener('input', (e) => store.updatePurchaseField(pending.id, 'notes', (e.target as HTMLTextAreaElement).value));
+        return ta;
+      })(),
+    ]));
+
+    const actions = h('div', { class: 'purchase-actions' });
+    const doneBtn = h('button', { class: 'btn btn-success' }, [icon('check'), '标记已买']);
+    doneBtn.addEventListener('click', () => {
+      if (confirm(`确认已购买？将补购数量 ${pending.quantity} 回填到库存并更新状态。`)) {
+        store.markPurchased(pending.id);
+      }
+    });
+    actions.appendChild(doneBtn);
+    const cancelBtn = h('button', { class: 'btn btn-ghost' }, [icon('x'), '取消补购']);
+    cancelBtn.addEventListener('click', () => {
+      if (confirm('确认取消此补购项？')) store.removePurchase(pending.id);
+    });
+    actions.appendChild(cancelBtn);
+    section.appendChild(actions);
+  } else {
+    if (status === 'completed' && latest) {
+      section.appendChild(h('div', { class: 'purchase-hint' }, [
+        icon('info'),
+        ` 上次补购已于 ${latest.completedAt || '—'} 完成，补购数量 ${latest.quantity}`,
+      ]));
+    } else {
+      section.appendChild(h('div', { class: 'purchase-hint' }, [
+        icon('info'),
+        ' 将该药品加入补购清单后，可维护补购数量、优先级与计划购买日期',
+      ]));
+    }
+    const addBtn = h('button', { class: 'btn btn-warning' }, [
+      icon('shopping-cart'),
+      status === 'completed' ? '再次加入补购' : '加入补购清单',
+    ]);
+    addBtn.addEventListener('click', () => store.addToPurchase(medicineId));
+    section.appendChild(h('div', { class: 'purchase-actions' }, [addBtn]));
+  }
+
+  return section;
+}
+
 function renderDetailPanel(container: HTMLElement) {
   const isOpen = store.getIsFormOpen();
   const editing = store.getEditingMedicine();
   const all = store.getMedicines();
+  const purchases = store.getPurchaseItems();
   container.innerHTML = '';
 
   const overlay = h('div', { class: `detail-panel-overlay ${isOpen ? 'open' : ''}` });
@@ -565,7 +813,10 @@ function renderDetailPanel(container: HTMLElement) {
   const panel = h('div', { class: `detail-panel ${isOpen ? 'open' : ''}` });
   if (isOpen && editing) {
     const isEdit = !!store.getDetailMedicineId();
-    const issues = isEdit ? getIssuesByMedicineId(all, editing.id) : [];
+    const issues = isEdit ? [
+      ...getIssuesByMedicineId(all, editing.id),
+      ...validatePurchases(all, purchases).filter((i) => i.medicineId === editing.id),
+    ] : [];
 
     panel.appendChild(h('div', { class: 'detail-panel-header' }, [
       h('div', { class: 'detail-panel-title' }, [isEdit ? '编辑药品' : '新增药品']),
@@ -680,6 +931,10 @@ function renderDetailPanel(container: HTMLElement) {
       })(),
     ]));
 
+    if (isEdit) {
+      body.appendChild(buildPurchaseSection(editing.id));
+    }
+
     panel.appendChild(body);
 
     const footer = h('div', { class: 'detail-panel-footer' });
@@ -689,7 +944,7 @@ function renderDetailPanel(container: HTMLElement) {
         '删除',
       ]);
       delBtn.addEventListener('click', () => {
-        if (confirm('确认删除此药品记录？')) {
+        if (confirm('确认删除此药品记录？关联的补购记录也将一并删除。')) {
           store.deleteMedicine(editing.id);
         }
       });
@@ -738,7 +993,7 @@ function render() {
       })(),
       (() => {
         const btn = h('button', { class: 'btn btn-secondary' }, [icon('download'), '导出CSV']);
-        btn.addEventListener('click', () => exportToCsv(store.getMedicines()));
+        btn.addEventListener('click', () => exportToCsv(store.getMedicines(), store.getPurchaseItems()));
         return btn;
       })(),
       (() => {
@@ -763,7 +1018,7 @@ function render() {
 
     const all = store.getMedicines();
     const filters = store.getFilters();
-    let list = filterMedicines(all, filters);
+    const list = filterMedicines(all, filters, store.getPurchaseItems());
     const batchContainer = h('div');
     renderBatchBar(batchContainer, list.map((m) => m.id));
     container.appendChild(batchContainer);
